@@ -1,0 +1,17 @@
+{
+    "Alt-/": "lua:comment.comment",
+    "CtrlUnderscore": "lua:comment.comment",
+    "Alt-x": "CommandMode",
+    "Ctrl-a": "StartOfText",
+    "Ctrl-e": "EndOfLine",
+    "Ctrl-r": "NextSplit",
+    "Ctrl-t": "lua:fzf.fzf",
+    "Ctrl-w": "Quit",
+    "Alt-g": "ToggleHelp",
+    "Alt-G": "ToggleKeyMenu",
+    "Tab": "Autocomplete|IndentSelection|IndentLine",
+    "MouseRight": "lua:acme.search",
+    "command": {
+        "Ctrl-g": "AbortCommand"    	
+    }
+}
