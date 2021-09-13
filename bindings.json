@@ -11,6 +11,7 @@
     "Alt-G": "ToggleKeyMenu",
     "Tab": "Autocomplete|IndentSelection|IndentLine",
     "MouseRight": "lua:acme.search",
+    "Alt-?": "lua:misc.complete",
     "command": {
         "Ctrl-g": "AbortCommand"    	
     }

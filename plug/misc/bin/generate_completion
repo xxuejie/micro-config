@@ -1,0 +1,23 @@
+#!/usr/bin/env ruby
+
+if ARGV.length < 1
+  puts "Usage: generate_completion --prefix <completion prefix> <path to source files...>"
+  exit 1
+end
+
+prefix = ""
+if ARGV[0] == "--prefix" && ARGV.length >= 3
+  prefix = ARGV[1]
+  ARGV.shift
+  ARGV.shift
+end
+
+candidates = ARGV.map do |filename|
+  File.read(filename).scan(/[A-Za-z0-9_]+/).uniq.sort
+end.flatten.uniq.sort
+    .select { |candidate| candidate.start_with?(prefix) }
+    .map { |candidate| candidate[prefix.length..-1] }
+
+candidates.each do |candidate|
+  puts candidate
+end
