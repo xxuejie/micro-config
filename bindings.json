@@ -7,6 +7,7 @@
     "Ctrl-r": "NextSplit",
     "Ctrl-t": "lua:fzf.fzf",
     "Ctrl-w": "Quit",
+    "Ctrl-q": "ToggleRuler",
     "Alt-g": "ToggleHelp",
     "Alt-G": "ToggleKeyMenu",
     "Tab": "Autocomplete|IndentSelection|IndentLine",

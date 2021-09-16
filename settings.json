@@ -1,5 +1,11 @@
 {
     "colorscheme": "simple",
+    "ft:go": {
+        "tabstospaces": false
+    },
+    "ft:rust": {
+        "tabsize": 4
+    },
     "tabsize": 2,
     "tabstospaces": true
 }
