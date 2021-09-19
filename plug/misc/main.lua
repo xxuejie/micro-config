@@ -14,7 +14,7 @@ function complete(_pane, _args)
 
     local line = v.Buf:Line(v.Cursor.Loc.Y)
     local s1 = string.sub(line, 1, v.Cursor.Loc.X)
-    local m1 = string.match(s1, "[^%s]*$")
+    local m1 = string.match(s1, "[A-Za-z0-9_]*$")
 
     _runComplete(m1, v.Buf.Path, {v, buffer.Loc(v.Cursor.X, v.Cursor.Y)})
 end
