@@ -1,3 +1,3 @@
 [submodule "plug/micro-acme"]
 	path = plug/micro-acme
-	url = git@github.com:xxuejie/micro-acme.git
+	url = https://github.com/xxuejie/micro-acme
