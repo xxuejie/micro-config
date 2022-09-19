@@ -1,0 +1,63 @@
+filetype: move
+
+detect:
+    filename: "\\.move$"
+
+rules:
+    # function definition
+    - identifier: "fun [a-z0-9_]+"
+      # Reserved words
+    - statement: "\\b(as|break|const|continue|do|else|enum|extern|false|fun|for|if|let|match|move|mut|return|static|struct|true|use|while|module|public|acquires|spec|aborts_if|ensures|move_to|has|copy|drop|store|key)\\b"
+      # macros
+    - special: "[a-z_]+!"
+      # Constants
+    - constant: "\\b[A-Z][A-Z_0-9]+\\b"
+      # Numbers
+    - constant.number: "\\b[0-9]+\\b"
+      # Booleans
+    - constant: "\\b(true|false)\\b"
+      # Traits/Enums/Structs/Types/etc.
+    - type: "\\b[A-Z]+[a-zA-Z_0-9]*[a-z]+[a-zA-Z_0-9]*\\b"
+      # Builtin types that start with lowercase.
+    - type: "\\b(bool|(u(8|64|128)))\\b"
+
+    - constant.string:
+        start: "\""
+        end: "\""
+        skip: '\\.'
+        rules:
+            - constant.specialChar: '\\.'
+
+    - constant.string:
+        start: "r#+\""
+        end: "\"#+"
+        rules: []
+
+    # Character literals
+    # NOTE: This is an ugly hack to work around the fact that rust uses
+    # single quotes both for character literals and lifetimes.
+    # Match all character literals.
+    - constant.string: "'(\\\\.|.)'"
+    # Match the '"' literal which would otherwise match
+    # as a double quoted string and destroy the highlighting.
+    - constant.string:
+        start: "'\""
+        end: "'"
+        rules: []
+
+    - comment:
+        start: "//"
+        end: "$"
+        rules:
+            - todo: "(TODO|XXX|FIXME):?"
+
+    - comment:
+        start: "/\\*"
+        end: "\\*/"
+        rules:
+            - todo: "(TODO|XXX|FIXME):?"
+
+    - special:
+        start: "#!\\["
+        end: "\\]"
+        rules: []
