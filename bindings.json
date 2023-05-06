@@ -1,20 +1,24 @@
 {
     "Alt-/": "lua:comment.comment",
-    "CtrlUnderscore": "lua:comment.comment",
+    "Alt-?": "lua:misc.complete",
+    "Alt-G": "ToggleKeyMenu",
+    "Alt-g": "ToggleHelp",
+    "Alt-t": "AddTab",
     "Alt-x": "CommandMode",
+    "Ctrl-F2": "command:toggleBookmark",
     "Ctrl-a": "StartOfText",
     "Ctrl-e": "EndOfLine",
+    "Ctrl-q": "ToggleRuler",
     "Ctrl-r": "NextSplit",
     "Ctrl-t": "lua:fzf.fzf",
     "Ctrl-w": "Quit",
-    "Ctrl-q": "ToggleRuler",
-    "Alt-t": "AddTab",
-    "Alt-g": "ToggleHelp",
-    "Alt-G": "ToggleKeyMenu",
-    "Tab": "Autocomplete|IndentSelection|IndentLine",
+    "CtrlShift-F2": "command:clearBookmarks",
+    "CtrlUnderscore": "lua:comment.comment",
+    "F2": "command:nextBookmark",
     "MouseRight": "lua:acme.search",
-    "Alt-?": "lua:misc.complete",
+    "Shift-F2": "command:prevBookmark",
+    "Tab": "Autocomplete|IndentSelection|IndentLine",
     "command": {
-        "Ctrl-g": "AbortCommand"    	
+        "Ctrl-g": "AbortCommand"
     }
 }
