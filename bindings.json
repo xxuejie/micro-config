@@ -16,6 +16,8 @@
     "CtrlUnderscore": "lua:comment.comment",
     "F2": "command:nextBookmark",
     "MouseRight": "lua:acme.search",
+    "Alt-MouseLeft": "lua:acme.tagExecute",
+    "Alt-MouseRight": "lua:acme.tagExecuteWithSelection",
     "Shift-F2": "command:prevBookmark",
     "Tab": "Autocomplete|IndentSelection|IndentLine",
     "command": {
