@@ -3,6 +3,9 @@
     "ft:go": {
         "tabstospaces": false
     },
+    "ft:markdown": {
+        "softwrap": true
+    },
     "ft:rust": {
         "tabsize": 4
     },
