@@ -1,9 +1,23 @@
 VERSION = "0.0.1"
 
 local micro = import("micro")
+local config = import("micro/config")
 local buffer = import("micro/buffer")
 local shell = import("micro/shell")
 local strings = import("strings")
+
+function toggleMouse(_pane, _args)
+    local ruler = config.GetGlobalOption("ruler")
+    if ruler then
+        config.SetGlobalOption("ruler", "false")
+        config.SetGlobalOption("mouse", "false")
+        micro.InfoBar():Message("Disabling ruler & mouse!")
+    else
+        config.SetGlobalOption("ruler", "true")
+        config.SetGlobalOption("mouse", "true")
+        micro.InfoBar():Message("Enabling ruler & mouse!")
+    end
+end
 
 function complete(_pane, _args)
     local v = micro.CurPane()

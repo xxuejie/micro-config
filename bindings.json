@@ -8,7 +8,7 @@
     "Ctrl-F2": "command:toggleBookmark",
     "Ctrl-a": "StartOfText",
     "Ctrl-e": "EndOfLine",
-    "Ctrl-q": "ToggleRuler",
+    "Ctrl-q": "lua:misc.toggleMouse",
     "Ctrl-r": "NextSplit",
     "Ctrl-t": "lua:fzf.fzf",
     "Ctrl-w": "Quit",
