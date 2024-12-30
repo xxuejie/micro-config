@@ -3,6 +3,7 @@
     "Alt-?": "lua:misc.complete",
     "Alt-G": "ToggleKeyMenu",
     "Alt-g": "ToggleHelp",
+    "Alt-q": "ToggleRuler",
     "Alt-t": "AddTab",
     "Alt-x": "CommandMode",
     "Ctrl-F2": "command:toggleBookmark",

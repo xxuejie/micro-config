@@ -11,11 +11,11 @@ function toggleMouse(_pane, _args)
     if ruler then
         config.SetGlobalOption("ruler", "false")
         config.SetGlobalOption("mouse", "false")
-        micro.InfoBar():Message("Disabling ruler & mouse!")
+        micro.InfoBar():Message("Disabled ruler & mouse")
     else
         config.SetGlobalOption("ruler", "true")
         config.SetGlobalOption("mouse", "true")
-        micro.InfoBar():Message("Enabling ruler & mouse!")
+        micro.InfoBar():Message("Enabled ruler & mouse")
     end
 end
 
