@@ -7,7 +7,8 @@
         "softwrap": true
     },
     "ft:rust": {
-        "tabsize": 4
+        "tabsize": 4,
+        "linter": false
     },
     "tabsize": 2,
     "tabstospaces": true
