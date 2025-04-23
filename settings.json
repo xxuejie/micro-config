@@ -1,5 +1,8 @@
 {
     "colorscheme": "simple",
+    "ft:c": {
+        "linter": false
+    },
     "ft:go": {
         "tabstospaces": false
     },
@@ -7,8 +10,8 @@
         "softwrap": true
     },
     "ft:rust": {
-        "tabsize": 4,
-        "linter": false
+        "linter": false,
+        "tabsize": 4
     },
     "tabsize": 2,
     "tabstospaces": true

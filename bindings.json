@@ -16,6 +16,7 @@
     "CtrlShift-F2": "command:clearBookmarks",
     "CtrlUnderscore": "lua:comment.comment",
     "F2": "command:nextBookmark",
+    "Alt-r": "lua:acme.search",
     "MouseRight": "lua:acme.search",
     "Alt-MouseLeft": "lua:acme.tagExecute",
     "Alt-MouseRight": "lua:acme.tagExecuteWithSelection",
