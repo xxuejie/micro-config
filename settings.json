@@ -13,6 +13,7 @@
         "linter": false,
         "tabsize": 4
     },
+    "incsearch": false,
     "tabsize": 2,
     "tabstospaces": true
 }
