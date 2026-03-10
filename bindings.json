@@ -10,7 +10,7 @@
     "Ctrl-a": "StartOfText",
     "Ctrl-e": "EndOfLine",
     "Ctrl-q": "lua:misc.toggleMouse",
-    "Ctrl-r": "NextSplit",
+    "Ctrl-r": "NextSplit|FirstSplit",
     "Ctrl-t": "lua:fzf.fzf",
     "Ctrl-w": "Quit",
     "CtrlShift-F2": "command:clearBookmarks",
