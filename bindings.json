@@ -13,6 +13,7 @@
     "Ctrl-r": "NextSplit|FirstSplit",
     "Ctrl-t": "lua:fzf.fzf",
     "Ctrl-w": "Quit",
+    "Ctrl-0": "JumpToMatchingBrace",
     "CtrlShift-F2": "command:clearBookmarks",
     "CtrlUnderscore": "lua:comment.comment",
     "F2": "command:nextBookmark",

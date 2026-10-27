@@ -1,0 +1,590 @@
+#!/usr/bin/env python3
+"""llm-review — proofread a Markdown document with an LLM (Anthropic-compatible API).
+
+A standalone proofreading tool that also plugs neatly into the micro editor:
+
+Standalone usage:
+    llm-review draft.md            # review a file
+    cat draft.md | llm-review      # review stdin (findings reported as line:col)
+    llm-review --init              # write the config file once, then edit it
+
+Output is grep-able compiler style, so it works with editors and CI:
+
+    <path>:<line>:<column>[:<end column>]: <problem> — suggestion: <correction>
+
+(column, and end column, are included whenever the problematic text can be
+located on the line; LLM-reported line numbers are verified against the
+text). With the micro acme plugin, right-clicking an address places the
+cursor (`file:line:col`) or selects the exact range (`file:line:col:cole`).
+For example, in vim:  :cex system('llm-review ' . expand('%:p'))  then
+:copen.
+
+With micro (acme plugin):
+    e llm-review    # blocking: output appears when done (acme `e` behavior)
+    ee              # streaming: pane opens at once, findings arrive live
+
+    The acme plugin sets the `samfile` environment variable to the current
+    buffer's path; this is used when no path argument is given.
+
+Findings are grouped into three sections:
+
+    ── Typos & grammar ──
+    ── Paraphrasing ──
+    ── Other suggestions ──
+
+The script uses the streaming (SSE) Messages API when the endpoint supports
+it, so findings are printed as they are generated. While the model is quiet
+it prints heartbeat placeholders to stderr:
+
+    [llm-review] reviewing /path/to.md with glm-5.3 (42 lines)...
+    [llm-review] still waiting (15s)...
+    [llm-review] done — 3 typo/grammar, 1 paraphrase in 48s
+
+Configuration:
+    Credentials are read from ~/.llm-review.json. Environment variables
+    LLM_REVIEW_* (or the equivalent ANTHROPIC_*) override the file. Example
+    file:
+
+        {
+          "base_url": "https://open.bigmodel.cn/api/anthropic",
+          "api_key":  "your-api-key",
+          "model":    "glm-5.3"
+        }
+
+    LLM_REVIEW_HEARTBEAT sets the heartbeat interval in seconds (0 disables
+    the heartbeat; default 15).
+"""
+
+import json
+import os
+import re
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+
+CONFIG_DEFAULT = "~/.llm-review.json"
+
+CONFIG_TEMPLATE = {
+    "base_url": "https://open.bigmodel.cn/api/anthropic",
+    "api_key": "paste-your-api-key-here",
+    "model": "glm-5.3",
+    "max_tokens": 4096,
+}
+
+SYSTEM_PROMPT = (
+    "You are a meticulous proofreader and copyeditor for Markdown documents. "
+    "You never change the meaning of the text and never comment on pure "
+    "style.\n"
+    "\n"
+    "The user sends a Markdown document. Every line is prefixed with \"NNNN|\" "
+    "where NNNN is the 1-based line number of that line in the original "
+    "document. The prefix is metadata, NOT part of the document.\n"
+    "\n"
+    "Report findings in three groups, in this exact order:\n"
+    "1. Typos, spelling mistakes, and grammar errors.\n"
+    "2. Paraphrasing suggestions: sentences that are grammatically fine but "
+    "could be phrased better or read more smoothly.\n"
+    "3. Other suggestions: anything else worth flagging (unclear wording, "
+    "inconsistent terminology, formatting mistakes, broken links, ...).\n"
+    "\n"
+    "Every finding is one single line in exactly this format:\n"
+    "\n"
+    "<line>: [<category>] \"<exact problematic text>\" — suggestion: "
+    "\"<correction>\"\n"
+    "\n"
+    "Rules:\n"
+    "- <line> is the 1-based line number taken from the prefix.\n"
+    "- <category> is one word: typo, paraphrase, or other.\n"
+    "- Quote the exact problematic text between double quotes, exactly as it "
+    "appears on that line (for paraphrases, quote the phrase to improve). "
+    "This text is used to locate the column, so it must match the line "
+    "character for character.\n"
+    "- Keep the rest of the explanation very short.\n"
+    "- Only report real issues; never invent findings to fill a group, and "
+    "skip groups with nothing to report.\n"
+    "- If one line has several errors, report each on its own line.\n"
+    "- If there are no issues at all, respond with exactly: No issues found.\n"
+    "- Do not output anything else: no headings, code fences, or commentary."
+)
+
+LINE_RE = re.compile(r"^(?:line\s+)?(\d+)\s*[:：]\s*(.*)$", re.IGNORECASE)
+COL_RE = re.compile(r"^(\d+)\s*[:：]\s*")
+CATEGORY_RE = re.compile(r"^\[?(typo|paraphrase|other)\]?\s*[:：]?\s+", re.IGNORECASE)
+CATEGORY_TITLES = {
+    "typo": "Typos & grammar",
+    "paraphrase": "Paraphrasing",
+    "other": "Other suggestions",
+}
+# "quoted", “curly quoted”, or `backticked` spans
+QUOTE_RE = re.compile(r'[“"]([^“”"\n]{2,})[”"]|`([^`\n]{2,})`')
+
+DASH = "—"
+
+
+def die(msg):
+    print("[llm-review] error: %s" % msg, file=sys.stderr, flush=True)
+    sys.exit(1)
+
+
+def status(msg):
+    print("[llm-review] %s" % msg, file=sys.stderr, flush=True)
+
+
+def config_path():
+    return os.path.expanduser(os.environ.get("LLM_REVIEW_CONFIG", CONFIG_DEFAULT))
+
+
+def init_config():
+    path = config_path()
+    if os.path.exists(path):
+        print("config already exists: %s" % path)
+        sys.exit(0)
+    with open(path, "w") as f:
+        json.dump(CONFIG_TEMPLATE, f, indent=2)
+        f.write("\n")
+    os.chmod(path, 0o600)
+    print("wrote %s" % path)
+    print("edit it to set base_url, api_key, and model.")
+
+
+def load_config():
+    cfg = {}
+    path = config_path()
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                cfg.update(data)
+        except (OSError, ValueError) as e:
+            die("cannot read config %s: %s" % (path, e))
+
+    # Normalize camelCase keys to snake_case.
+    for src, dst in (("baseUrl", "base_url"), ("apiKey", "api_key")):
+        if src in cfg and dst not in cfg:
+            cfg[dst] = cfg.pop(src)
+
+    # Environment overrides.
+    env_map = {
+        "base_url": ("LLM_REVIEW_BASE_URL", "ANTHROPIC_BASE_URL"),
+        "api_key": ("LLM_REVIEW_API_KEY", "ANTHROPIC_API_KEY"),
+        "model": ("LLM_REVIEW_MODEL", "ANTHROPIC_MODEL"),
+        "endpoint": ("LLM_REVIEW_ENDPOINT",),
+        "max_tokens": ("LLM_REVIEW_MAX_TOKENS",),
+    }
+    for key, names in env_map.items():
+        for name in names:
+            if os.environ.get(name):
+                cfg[key] = os.environ[name]
+                break
+
+    cfg.setdefault("base_url", "")
+    cfg.setdefault("api_key", "")
+    cfg.setdefault("model", "glm-5.3")
+    cfg.setdefault("max_tokens", 4096)
+    return cfg
+
+
+def endpoint(cfg):
+    if cfg.get("endpoint"):
+        return cfg["endpoint"]
+    base = (cfg.get("base_url") or "").rstrip("/")
+    if not base:
+        die("no base_url configured "
+            "(run `llm-review --init`, or set LLM_REVIEW_BASE_URL)")
+    if base.endswith("/v1/messages"):
+        return base
+    if base.endswith("/messages"):
+        return base
+    return base + "/v1/messages"
+
+
+def read_input():
+    """Return (content, path). Input priority: argv path > $samfile > stdin."""
+    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    if args:
+        path = os.path.expanduser(args[0])
+        try:
+            with open(path) as f:
+                return f.read(), path
+        except OSError as e:
+            die("cannot read %s: %s" % (path, e))
+
+    path = os.environ.get("samfile", "") or ""
+    if path:
+        path = os.path.expanduser(path)
+        try:
+            with open(path) as f:
+                return f.read(), path
+        except OSError as e:
+            die("cannot read %s: %s" % (path, e))
+
+    if not sys.stdin.isatty():
+        return sys.stdin.read(), ""
+
+    die("no input: pass a file path, pipe text via stdin, "
+        "or run from micro (e llm-review / ee)")
+
+
+def number_lines(text):
+    lines = text.splitlines()
+    if not lines:
+        return "(empty document)"
+    return "\n".join("%04d|%s" % (i + 1, line) for i, line in enumerate(lines))
+
+
+class Heartbeat:
+    """Prints '[llm-review] still waiting (Ns)...' while the model is quiet."""
+
+    def __init__(self, interval):
+        self.interval = interval
+        self.t0 = time.monotonic()
+        self.stop_event = threading.Event()
+        self.thread = None
+        if interval > 0:
+            self.thread = threading.Thread(target=self._run, daemon=True)
+            self.thread.start()
+
+    def _run(self):
+        while not self.stop_event.wait(self.interval):
+            status("still waiting (%ds)..." % int(time.monotonic() - self.t0))
+
+    def stop(self):
+        if self.thread is not None:
+            self.stop_event.set()
+            self.thread.join(timeout=2)
+
+    def elapsed(self):
+        return int(time.monotonic() - self.t0)
+
+
+def clean_line(raw):
+    cleaned = raw.strip()
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"^(\s*[-*+]\s+)+", "", cleaned)
+    cleaned = re.sub(r"^\s*\d+[.)]\s+", "", cleaned)
+    return cleaned.replace("**", "").strip()
+
+
+def extract_quoted(text):
+    spans = []
+    for a, b in QUOTE_RE.findall(text):
+        spans.append(a if a else b)
+    return spans
+
+
+class Emitter:
+    """Turns model output lines into grouped, column-aware findings.
+
+    Model lines look like:  <line>: [typo] "teh" — suggestion: "the"
+    Emitted lines look like: <path>:12:9: "teh" — suggestion: "the"
+
+    The column is computed locally by locating the quoted text on the
+    original document line (LLMs cannot count columns reliably). When the
+    category changes, a section header is printed, which groups the output
+    into Typos & grammar / Paraphrasing / Other suggestions.
+    """
+
+    def __init__(self, path, doc_lines):
+        self.path = path
+        self.doc_lines = doc_lines
+        self.current_category = None
+        self.counts = {"typo": 0, "paraphrase": 0, "other": 0}
+        self.untagged = 0
+        self.printed_any = False
+
+    def total(self):
+        return sum(self.counts.values()) + self.untagged
+
+    def _find_span(self, lineno, problem):
+        """Locate the problematic text on the line.
+
+        Returns (col, cole), 1-based inclusive, or None if not found.
+        """
+        if lineno < 1 or lineno > len(self.doc_lines):
+            return None
+        line = self.doc_lines[lineno - 1]
+        if not line:
+            return None
+
+        candidates = extract_quoted(problem)
+        # Fall back to the text before the "— suggestion:" dash.
+        prefix = problem.split(DASH)[0].strip().strip('"“”`')
+        if len(prefix) >= 2 and prefix not in candidates:
+            candidates.append(prefix)
+
+        for cand in candidates:
+            idx = line.find(cand)
+            if idx >= 0:
+                return idx + 1, idx + len(cand)
+        for cand in candidates:
+            idx = line.lower().find(cand.lower())
+            if idx >= 0:
+                return idx + 1, idx + len(cand)
+        return None
+
+    def emit(self, raw):
+        """Emit one model line. Returns 1 if it was a finding."""
+        cleaned = clean_line(raw)
+        if not cleaned:
+            return 0
+
+        m = LINE_RE.match(cleaned)
+        if not m:
+            # Preamble / "No issues found." / chatter — print as-is.
+            print(cleaned, flush=True)
+            self.printed_any = True
+            return 0
+
+        lineno = int(m.group(1))
+        rest = m.group(2).strip()
+
+        # Tolerate a model-supplied column (<line>:<col>: ...), but prefer
+        # the locally computed one.
+        model_col = None
+        mc = COL_RE.match(rest)
+        if mc:
+            model_col = int(mc.group(1))
+            rest = rest[mc.end():].strip()
+
+        category = None
+        cat_m = CATEGORY_RE.match(rest)
+        if cat_m:
+            category = cat_m.group(1).lower()
+            rest = rest[cat_m.end():].strip()
+
+        if category and category != self.current_category:
+            self.current_category = category
+            print("\n── %s ──" % CATEGORY_TITLES[category], flush=True)
+            self.printed_any = True
+
+        problem = rest.split(DASH)[0] if DASH in rest else rest
+        span = self._find_span(lineno, problem)
+        col = span[0] if span else model_col
+
+        loc = "%s:%d" % (self.path, lineno) if self.path else str(lineno)
+        if col:
+            loc += ":%d" % col
+        if span:
+            loc += ":%d" % span[1]
+        print("%s: %s" % (loc, rest), flush=True)
+
+        if category:
+            self.counts[category] += 1
+        else:
+            self.untagged += 1
+        self.printed_any = True
+        return 1
+
+
+def build_request(url, cfg, user, stream):
+    try:
+        max_tokens = int(cfg["max_tokens"])
+    except (TypeError, ValueError):
+        max_tokens = 4096
+
+    payload = {
+        "model": cfg["model"],
+        "max_tokens": max_tokens,
+        "stream": bool(stream),
+        "system": SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": user}],
+    }
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"), method="POST"
+    )
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "text/event-stream" if stream else "application/json")
+    req.add_header("x-api-key", cfg["api_key"])
+    req.add_header("anthropic-version", "2023-06-01")
+    return req
+
+
+def open_response(req):
+    try:
+        return urllib.request.urlopen(req, timeout=600)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")
+        die("HTTP %d from API: %s" % (e.code, detail))
+    except urllib.error.URLError as e:
+        die("request failed: %s" % e.reason)
+
+
+def stream_findings(resp, emitter, beat):
+    """Consume an SSE response, emitting findings as they arrive."""
+    stop_reason = None
+    pending = ""
+
+    try:
+        for raw in resp:
+            line = raw.decode("utf-8", "replace").strip()
+            if not line or line.startswith(":") or line.startswith("event:"):
+                continue
+            if not line.startswith("data:"):
+                continue
+            data = line[len("data:"):].strip()
+            if data == "[DONE]":
+                break
+            try:
+                ev = json.loads(data)
+            except ValueError:
+                continue
+
+            etype = ev.get("type")
+            if etype == "content_block_delta":
+                beat.stop()  # first token arrived; findings are the feedback now
+                delta = ev.get("delta") or {}
+                text = delta.get("text")
+                if isinstance(text, str) and text:
+                    pending += text
+                    while "\n" in pending:
+                        complete, pending = pending.split("\n", 1)
+                        emitter.emit(complete)
+            elif etype == "message_delta":
+                reason = (ev.get("delta") or {}).get("stop_reason")
+                if reason:
+                    stop_reason = reason
+            elif etype == "error":
+                err = ev.get("error") or {}
+                die("stream error: %s" % (err.get("message") or ev))
+            elif etype == "message_stop":
+                break
+    except TimeoutError:
+        die("timed out waiting for the model")
+
+    if pending.strip():
+        emitter.emit(pending)
+    return stop_reason
+
+
+def plain_findings(resp, emitter):
+    """Fallback for endpoints that answered with a regular JSON body."""
+    body = resp.read().decode("utf-8", "replace")
+    text = extract_text(body)
+    if not text.strip():
+        status("warning: empty response from model")
+        return None
+    for raw in text.splitlines():
+        emitter.emit(raw)
+    stop_reason = None
+    try:
+        stop_reason = json.loads(body).get("stop_reason")
+    except ValueError:
+        pass
+    return stop_reason
+
+
+def extract_text(body):
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return body
+
+    content = data.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        if parts:
+            return "\n".join(parts)
+
+    # Tolerate OpenAI-style responses as well.
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices:
+        msg = choices[0].get("message") or {}
+        c = msg.get("content")
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            parts = []
+            for item in c:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+            return "\n".join(parts)
+
+    return body
+
+
+def review(url, cfg, user, emitter, beat):
+    req = build_request(url, cfg, user, stream=True)
+    resp = open_response(req)
+    ctype = (resp.headers.get("Content-Type") or "").lower()
+    if "text/event-stream" in ctype:
+        return stream_findings(resp, emitter, beat)
+    # Endpoint does not stream (or answered JSON) — fall back.
+    return plain_findings(resp, emitter)
+
+
+def summary(emitter, elapsed):
+    parts = []
+    if emitter.counts["typo"]:
+        parts.append("%d typo/grammar" % emitter.counts["typo"])
+    if emitter.counts["paraphrase"]:
+        parts.append("%d paraphrase" % emitter.counts["paraphrase"])
+    if emitter.counts["other"]:
+        parts.append("%d other" % emitter.counts["other"])
+    if emitter.untagged:
+        parts.append("%d untagged" % emitter.untagged)
+    if not parts:
+        return "done — no issues in %ds" % elapsed
+    return "done — %s in %ds" % (", ".join(parts), elapsed)
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ("--init", "init", "setup"):
+        init_config()
+        return
+    if len(sys.argv) > 1 and sys.argv[1] in ("--help", "-h", "help"):
+        print(__doc__)
+        return
+
+    cfg = load_config()
+    api_key = (cfg.get("api_key") or "").strip()
+    if not api_key or api_key.startswith("paste-"):
+        die("no api_key configured "
+            "(run `llm-review --init`, or set LLM_REVIEW_API_KEY)")
+
+    content, path = read_input()
+    if not content.strip():
+        die("no input: pass a file path, pipe text via stdin, "
+            "or run from micro (e llm-review / ee llm-review)")
+    nlines = len(content.splitlines())
+    model = cfg["model"]
+
+    try:
+        heartbeat_interval = float(os.environ.get("LLM_REVIEW_HEARTBEAT", 15))
+    except ValueError:
+        heartbeat_interval = 15.0
+    beat = Heartbeat(heartbeat_interval)
+    emitter = Emitter(path, content.splitlines())
+
+    display_path = path if path else "(stdin)"
+    status("reviewing %s with %s (%d lines)..." % (display_path, model, nlines))
+    user_msg = "Document to review:\n\n" + number_lines(content)
+
+    try:
+        stop_reason = review(endpoint(cfg), cfg, user_msg, emitter, beat)
+    finally:
+        beat.stop()
+
+    if emitter.total() == 0 and not emitter.printed_any:
+        print("No issues found.", flush=True)
+
+    if stop_reason == "max_tokens":
+        status("warning: response truncated (max_tokens) — "
+               "raise max_tokens in the config and re-run")
+    status(summary(emitter, beat.elapsed()))
+
+
+if __name__ == "__main__":
+    main()
